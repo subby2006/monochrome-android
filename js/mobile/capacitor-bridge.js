@@ -100,7 +100,7 @@ async function ensureMediaStorePermission(type) {
 
     if (permissionState && permissionState !== 'granted') {
         await Dialog.alert({
-            title: 'Permission not granted',
+            title: 'Permission denied',
             message: `Please open the Android app settings to grant permission to store music`,
         });
         throw new Error(`MediaStore ${type} permission was not granted`);
