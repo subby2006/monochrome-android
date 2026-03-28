@@ -13,7 +13,6 @@ Thank you for your interest in contributing to Monochrome! This guide will help 
 - [Contributing Workflow](#contributing-workflow)
 - [Commit Message Guidelines](#commit-message-guidelines)
 - [Deployment](#deployment)
-- [Questions?](#questions)
 
 ---
 
@@ -100,9 +99,6 @@ npm run build native
 ```
 monochrome/
 ├── 📁 js/                    # Application source code
-│   ├── components/          # UI components
-│   ├── utils/               # Utility functions
-│   ├── api/                 # API integration
 │   └── ...
 ├── 📁 public/               # Static assets
 │   ├── assets/             # Images, icons, fonts
@@ -207,7 +203,7 @@ Follow our [commit message guidelines](#commit-message-guidelines).
 
 ```bash
 git add .
-git commit -m "feat(player): add keyboard shortcut for loop toggle"
+git commit -m "feat(player): add keyboard shortcut for loop toggle" # example commit message
 ```
 
 ### 5. Push and Create a Pull Request
@@ -309,7 +305,7 @@ Deployment is fully automated via **Cloudflare Pages**.
 
 1. Push changes to the `main` branch
 2. Cloudflare automatically builds and deploys
-3. Changes are live within minutes
+3. Changes are live a minute
 
 ### Configuration Notes
 
