@@ -10,14 +10,12 @@ import {
     cardSettings,
     waveformSettings,
     replayGainSettings,
-    smoothScrollingSettings,
     downloadQualitySettings,
     losslessContainerSettings,
     coverArtSizeSettings,
     qualityBadgeSettings,
     trackDateSettings,
     visualizerSettings,
-    bulkDownloadSettings,
     playlistSettings,
     equalizerSettings,
     listenBrainzSettings,
@@ -33,11 +31,11 @@ import {
     pwaUpdateSettings,
     contentBlockingSettings,
     musicProviderSettings,
+    gaplessPlaybackSettings,
     analyticsSettings,
     modalSettings,
 } from './storage.js';
 import { audioContextManager, EQ_PRESETS } from './audio-context.js';
-import { getButterchurnPresets } from './visualizers/butterchurn.js';
 import { db } from './db.js';
 import { authManager } from './accounts/auth.js';
 import { syncManager } from './accounts/pocketbase.js';
@@ -45,7 +43,12 @@ import { saveFirebaseConfig, clearFirebaseConfig } from './accounts/config.js';
 import { Share } from '@capacitor/share';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 
-export function initializeSettings(scrobbler, player, api, ui) {
+async function getButterchurnPresets(...args) {
+    const butterchurnModule = await import('./visualizers/butterchurn.js');
+    return butterchurnModule.getButterchurnPresets(...args);
+}
+
+export async function initializeSettings(scrobbler, player, api, ui) {
     // Restore last active settings tab
     const savedTab = settingsUiState.getActiveTab();
     const settingsTab = document.querySelector(`.settings-tab[data-tab="${savedTab}"]`);
@@ -61,7 +64,7 @@ export function initializeSettings(scrobbler, player, api, ui) {
 
     // Email Auth UI Logic
     const toggleEmailBtn = document.getElementById('toggle-email-auth-btn');
-    const cancelEmailBtn = document.getElementById('cancel-email-auth-btn');
+    const authModalCloseBtn = document.getElementById('email-auth-modal-close');
     const authModal = document.getElementById('email-auth-modal');
     const emailInput = document.getElementById('auth-email');
     const passwordInput = document.getElementById('auth-password');
@@ -75,14 +78,10 @@ export function initializeSettings(scrobbler, player, api, ui) {
         });
     }
 
-    if (cancelEmailBtn && authModal) {
-        cancelEmailBtn.addEventListener('click', () => {
-            authModal.classList.remove('active');
-        });
-
-        authModal.querySelector('.modal-overlay').addEventListener('click', () => {
-            authModal.classList.remove('active');
-        });
+    if (authModal) {
+        const closeAuthModal = () => authModal.classList.remove('active');
+        authModalCloseBtn?.addEventListener('click', closeAuthModal);
+        authModal.querySelector('.modal-overlay')?.addEventListener('click', closeAuthModal);
     }
 
     if (signInBtn) {
@@ -465,6 +464,8 @@ export function initializeSettings(scrobbler, player, api, ui) {
     const lbToggle = document.getElementById('listenbrainz-enabled-toggle');
     const lbTokenSetting = document.getElementById('listenbrainz-token-setting');
     const lbCustomUrlSetting = document.getElementById('listenbrainz-custom-url-setting');
+    const lbLoveSetting = document.getElementById('listenbrainz-love-setting');
+    const lbLoveToggle = document.getElementById('listenbrainz-love-toggle');
     const lbTokenInput = document.getElementById('listenbrainz-token-input');
     const lbCustomUrlInput = document.getElementById('listenbrainz-custom-url-input');
 
@@ -473,8 +474,10 @@ export function initializeSettings(scrobbler, player, api, ui) {
         if (lbToggle) lbToggle.checked = isEnabled;
         if (lbTokenSetting) lbTokenSetting.style.display = isEnabled ? 'flex' : 'none';
         if (lbCustomUrlSetting) lbCustomUrlSetting.style.display = isEnabled ? 'flex' : 'none';
+        if (lbLoveSetting) lbLoveSetting.style.display = isEnabled ? 'flex' : 'none';
         if (lbTokenInput) lbTokenInput.value = listenBrainzSettings.getToken();
         if (lbCustomUrlInput) lbCustomUrlInput.value = listenBrainzSettings.getCustomUrl();
+        if (lbLoveToggle) lbLoveToggle.checked = listenBrainzSettings.shouldLoveOnLike();
     };
 
     updateListenBrainzUI();
@@ -496,6 +499,12 @@ export function initializeSettings(scrobbler, player, api, ui) {
     if (lbCustomUrlInput) {
         lbCustomUrlInput.addEventListener('change', (e) => {
             listenBrainzSettings.setCustomUrl(e.target.value.trim());
+        });
+    }
+
+    if (lbLoveToggle) {
+        lbLoveToggle.addEventListener('change', (e) => {
+            listenBrainzSettings.setLoveOnLike(e.target.checked);
         });
     }
 
@@ -788,35 +797,137 @@ export function initializeSettings(scrobbler, player, api, ui) {
     // Streaming Quality setting
     const streamingQualitySetting = document.getElementById('streaming-quality-setting');
     if (streamingQualitySetting) {
-        const savedQuality = localStorage.getItem('playback-quality') || 'HI_RES_LOSSLESS';
-        streamingQualitySetting.value = savedQuality;
-        player.setQuality(savedQuality);
+        const savedAdaptiveQuality = localStorage.getItem('adaptive-playback-quality') || 'auto';
+
+        // Map the stored auto state to the dropdown, or if it doesn't match an option, use the playback-quality value
+        const optionExists = Array.from(streamingQualitySetting.options).some(
+            (opt) => opt.value === savedAdaptiveQuality
+        );
+        streamingQualitySetting.value = optionExists
+            ? savedAdaptiveQuality
+            : localStorage.getItem('playback-quality') || 'auto';
+
+        // Apply initially
+        if (player.forceQuality) player.forceQuality(streamingQualitySetting.value);
+        const apiQuality = streamingQualitySetting.value === 'auto' ? 'HI_RES_LOSSLESS' : streamingQualitySetting.value;
+        player.setQuality(localStorage.getItem('playback-quality') || apiQuality);
 
         streamingQualitySetting.addEventListener('change', (e) => {
-            const newQuality = e.target.value;
-            player.setQuality(newQuality);
-            localStorage.setItem('playback-quality', newQuality);
+            const val = e.target.value;
+
+            // Set adaptive DASH quality
+            localStorage.setItem('adaptive-playback-quality', val);
+            if (player.forceQuality) player.forceQuality(val);
+
+            // Set fallback API quality
+            const newApiQuality = val === 'auto' ? 'HI_RES_LOSSLESS' : val;
+            player.setQuality(newApiQuality);
+            localStorage.setItem('playback-quality', newApiQuality);
         });
     }
 
     // Download Quality setting
     const downloadQualitySetting = document.getElementById('download-quality-setting');
     if (downloadQualitySetting) {
+        // Assign categories to the static (native) options already in the HTML
+        const staticCategories = {
+            DOLBY_ATMOS: 'Spatial',
+            HI_RES_LOSSLESS: 'Lossless',
+            LOSSLESS: 'Lossless',
+            HIGH: 'AAC',
+            LOW: 'AAC',
+        };
+
+        // Collect static options first (preserving their original order)
+        const allOptions = Array.from(downloadQualitySetting.options).map((opt) => ({
+            value: opt.value,
+            text: opt.textContent,
+            category: staticCategories[opt.value] || 'Other',
+        }));
+
+        // Append custom (ffmpeg-transcoded) format options
+        for (const [key, fmt] of Object.entries(customFormats)) {
+            allOptions.push({ value: key, text: fmt.displayName, category: fmt.category });
+        }
+
+        // Sort by category order first, then by bitrate descending within each category
+        // so higher-quality options always appear before lower-quality ones.
+        // Options without an explicit kbps value (lossless) use Infinity so they
+        // sort to the top; ties fall back to display-name descending.
+        const getBitrate = (text) => {
+            const m = text.match(/(\d+)\s*kbps/i);
+            return m ? parseInt(m[1], 10) : Infinity;
+        };
+        const categoryOrder = ['Spatial', 'Lossless', 'AAC', 'MP3', 'OGG'];
+        allOptions.sort((a, b) => {
+            if (a.category == b.category && a.category === 'Lossless') return 0; // Preserve original order for lossless options
+            const ai = categoryOrder.indexOf(a.category);
+            const bi = categoryOrder.indexOf(b.category);
+            const categoryDiff = (ai === -1 ? categoryOrder.length : ai) - (bi === -1 ? categoryOrder.length : bi);
+            if (categoryDiff !== 0) return categoryDiff;
+            const bitrateA = getBitrate(a.text);
+            const bitrateB = getBitrate(b.text);
+            if (bitrateA !== bitrateB) return bitrateB - bitrateA;
+            return b.text.localeCompare(a.text);
+        });
+
+        // Rebuild the select with optgroup elements per category
+        downloadQualitySetting.innerHTML = '';
+        let currentGroup = null;
+        let currentCategory = null;
+        for (const opt of allOptions) {
+            if (opt.category !== currentCategory) {
+                currentCategory = opt.category;
+                currentGroup = document.createElement('optgroup');
+                currentGroup.label = opt.category;
+                downloadQualitySetting.appendChild(currentGroup);
+            }
+            const option = document.createElement('option');
+            option.value = opt.value;
+            option.textContent = opt.text;
+            currentGroup.appendChild(option);
+        }
+
         downloadQualitySetting.value = downloadQualitySettings.getQuality();
 
         downloadQualitySetting.addEventListener('change', (e) => {
             downloadQualitySettings.setQuality(e.target.value);
+            updateLosslessContainerVisibility();
         });
     }
 
     const losslessContainerSetting = document.getElementById('lossless-container-setting');
+    const losslessContainerSettingItem = losslessContainerSetting?.closest('.setting-item');
+
+    /** Shows/hides the Lossless Container setting based on the selected quality */
+    function updateLosslessContainerVisibility() {
+        if (!losslessContainerSettingItem) return;
+        const quality = downloadQualitySettings.getQuality();
+        const isLossless = quality === 'LOSSLESS' || quality === 'HI_RES_LOSSLESS';
+        losslessContainerSettingItem.style.display = isLossless ? '' : 'none';
+    }
+
     if (losslessContainerSetting) {
+        const noChangeOption = losslessContainerSetting.querySelector('option:last-child');
+        noChangeOption.remove();
+
+        for (const [internalName, { displayName }] of Object.entries(containerFormats)) {
+            const option = document.createElement('option');
+            option.value = internalName;
+            option.textContent = displayName;
+            losslessContainerSetting.appendChild(option);
+        }
+
+        losslessContainerSetting.append(noChangeOption);
+
         losslessContainerSetting.value = losslessContainerSettings.getContainer();
 
         losslessContainerSetting.addEventListener('change', (e) => {
             losslessContainerSettings.setContainer(e.target.value);
         });
     }
+
+    updateLosslessContainerVisibility();
 
     // Cover Art Size setting
     const coverArtSizeSetting = document.getElementById('cover-art-size-setting');
@@ -848,11 +959,177 @@ export function initializeSettings(scrobbler, player, api, ui) {
         });
     }
 
-    const zippedBulkDownloadsToggle = document.getElementById('zipped-bulk-downloads-toggle');
-    if (zippedBulkDownloadsToggle) {
-        zippedBulkDownloadsToggle.checked = !bulkDownloadSettings.shouldForceIndividual();
-        zippedBulkDownloadsToggle.addEventListener('change', (e) => {
-            bulkDownloadSettings.setForceIndividual(!e.target.checked);
+    const forceZipBlobToggle = document.getElementById('force-zip-blob-toggle');
+    const forceZipBlobSettingItem = forceZipBlobToggle?.closest('.setting-item');
+    const hasFileSystemAccess =
+        'showSaveFilePicker' in window &&
+        typeof FileSystemFileHandle !== 'undefined' &&
+        'createWritable' in FileSystemFileHandle.prototype;
+    const hasFolderPicker = 'showDirectoryPicker' in window;
+
+    const rememberFolderSetting = document.getElementById('remember-folder-setting');
+    const rememberFolderToggle = document.getElementById('remember-folder-toggle');
+    const resetSavedFolderSetting = document.getElementById('reset-saved-folder-setting');
+    const resetSavedFolderBtn = document.getElementById('reset-saved-folder-btn');
+    const singleToFolderSetting = document.getElementById('single-to-folder-setting');
+    const singleToFolderToggle = document.getElementById('single-to-folder-toggle');
+
+    /** Shows/hides the Force ZIP as Blob setting based on method and browser support */
+    function updateForceZipBlobVisibility() {
+        if (!forceZipBlobSettingItem) return;
+        const method = modernSettings.bulkDownloadMethod;
+        // Only relevant when zip method is selected and the browser supports streaming
+        const visible = method === 'zip' && hasFileSystemAccess;
+        forceZipBlobSettingItem.style.display = visible ? '' : 'none';
+    }
+
+    /** Shows/hides folder-picker-specific and folder-method settings */
+    async function updateFolderMethodVisibility() {
+        const method = modernSettings.bulkDownloadMethod;
+        const isFolderMethod = method === 'folder';
+        const isFolderOrLocal = isFolderMethod || method === 'local';
+
+        if (rememberFolderSetting) {
+            rememberFolderSetting.style.display = isFolderMethod && hasFolderPicker ? '' : 'none';
+        }
+
+        // Reset button: only visible when folder method + remember enabled + valid saved handle exists
+        if (resetSavedFolderSetting) {
+            let showReset = false;
+            if (isFolderMethod && hasFolderPicker && modernSettings.rememberBulkDownloadFolder) {
+                const savedHandle = await db.getSetting('bulk_download_folder_handle');
+                showReset = !!savedHandle;
+            }
+            resetSavedFolderSetting.style.display = showReset ? '' : 'none';
+        }
+
+        if (singleToFolderSetting) {
+            singleToFolderSetting.style.display = isFolderOrLocal ? '' : 'none';
+        }
+    }
+
+    const bulkDownloadMethod = document.getElementById('bulk-download-method');
+    if (bulkDownloadMethod) {
+        // Remove the folder picker option if the browser doesn't support it
+        if (!hasFolderPicker) {
+            const folderOption = bulkDownloadMethod.querySelector('option[value="folder"]');
+            if (folderOption) {
+                folderOption.remove();
+            }
+            const localOption = bulkDownloadMethod.querySelector('option[value="local"]');
+            if (localOption) {
+                localOption.remove();
+            }
+            // If the stored method is 'folder' or 'local' without native support, fall back to 'zip'
+            const currentMethod = modernSettings.bulkDownloadMethod;
+            if (currentMethod === 'folder' || currentMethod === 'local') {
+                modernSettings.bulkDownloadMethod = 'zip';
+            }
+        }
+        bulkDownloadMethod.value = modernSettings.bulkDownloadMethod;
+        bulkDownloadMethod.addEventListener('change', async (e) => {
+            const previousMethod = modernSettings.bulkDownloadMethod;
+            const newMethod = e.target.value;
+            modernSettings.bulkDownloadMethod = newMethod;
+
+            // When switching to 'local', prompt to select the local media folder if not yet configured
+            if (newMethod === 'local') {
+                const existingHandle = await db.getSetting('local_folder_handle');
+                if (!existingHandle) {
+                    let picked = false;
+                    try {
+                        const isNeutralino =
+                            window.Neutralino && (window.NL_MODE || window.location.search.includes('mode=neutralino'));
+                        if (isNeutralino) {
+                            const path = await window.Neutralino.os.showFolderDialog('Select Local Media Folder');
+                            if (path) {
+                                picked = true;
+                                const handle = {
+                                    name: path.split(/[/\\]/).pop() || path,
+                                    isNeutralino: true,
+                                    path,
+                                };
+                                await db.saveSetting('local_folder_handle', handle);
+                            }
+                        } else if (hasFolderPicker) {
+                            const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                            if (handle) {
+                                picked = true;
+                                await db.saveSetting('local_folder_handle', handle);
+                            }
+                        }
+                    } catch {
+                        // User cancelled the picker
+                    }
+
+                    if (!picked) {
+                        // Revert to the previous method since no folder was selected.
+                        // Guard against the edge case where the previousMethod option
+                        // no longer exists in the dropdown (e.g. removed due to no API support).
+                        if (bulkDownloadMethod.querySelector(`option[value="${previousMethod}"]`)) {
+                            modernSettings.bulkDownloadMethod = previousMethod;
+                            bulkDownloadMethod.value = previousMethod;
+                        } else {
+                            // Fall back to zip which is always present
+                            modernSettings.bulkDownloadMethod = 'zip';
+                            bulkDownloadMethod.value = 'zip';
+                        }
+                    }
+                }
+            }
+            await modernSettings.waitPending();
+
+            updateForceZipBlobVisibility();
+            await updateFolderMethodVisibility();
+        });
+    }
+
+    if (rememberFolderToggle) {
+        rememberFolderToggle.checked = modernSettings.rememberBulkDownloadFolder;
+        rememberFolderToggle.addEventListener('change', async (e) => {
+            modernSettings.rememberBulkDownloadFolder = !!e.target.checked;
+            await modernSettings.waitPending();
+            await updateFolderMethodVisibility();
+        });
+    }
+
+    if (resetSavedFolderBtn) {
+        resetSavedFolderBtn.addEventListener('click', async () => {
+            await db.saveSetting('bulk_download_folder_handle', null);
+            await updateFolderMethodVisibility();
+        });
+    }
+
+    if (singleToFolderToggle) {
+        singleToFolderToggle.checked = modernSettings.downloadSinglesToFolder;
+        singleToFolderToggle.addEventListener('change', (e) => {
+            modernSettings.downloadSinglesToFolder = !!e.target.checked;
+        });
+    }
+
+    if (forceZipBlobToggle) {
+        forceZipBlobToggle.checked = modernSettings.forceZipBlob;
+        forceZipBlobToggle.addEventListener('change', (e) => {
+            modernSettings.forceZipBlob = !!e.target.checked;
+        });
+    }
+
+    updateForceZipBlobVisibility();
+    updateFolderMethodVisibility();
+
+    const includeCoverToggle = document.getElementById('include-cover-toggle');
+    if (includeCoverToggle) {
+        includeCoverToggle.checked = playlistSettings.shouldIncludeCover();
+        includeCoverToggle.addEventListener('change', (e) => {
+            playlistSettings.setIncludeCover(e.target.checked);
+        });
+    }
+
+    const gaplessPlaybackToggle = document.getElementById('gapless-playback-toggle');
+    if (gaplessPlaybackToggle) {
+        gaplessPlaybackToggle.checked = gaplessPlaybackSettings.isEnabled();
+        gaplessPlaybackToggle.addEventListener('change', (e) => {
+            gaplessPlaybackSettings.setEnabled(e.target.checked);
         });
     }
 
@@ -2108,17 +2385,6 @@ export function initializeSettings(scrobbler, player, api, ui) {
         });
     }
 
-    // Smooth Scrolling Toggle
-    const smoothScrollingToggle = document.getElementById('smooth-scrolling-toggle');
-    if (smoothScrollingToggle) {
-        smoothScrollingToggle.checked = smoothScrollingSettings.isEnabled();
-        smoothScrollingToggle.addEventListener('change', (e) => {
-            smoothScrollingSettings.setEnabled(e.target.checked);
-
-            window.dispatchEvent(new CustomEvent('smooth-scrolling-toggle', { detail: { enabled: e.target.checked } }));
-        });
-    }
-
     // Visualizer Sensitivity
     const visualizerSensitivitySlider = document.getElementById('visualizer-sensitivity-slider');
     const visualizerSensitivityValue = document.getElementById('visualizer-sensitivity-value');
@@ -2188,7 +2454,7 @@ export function initializeSettings(scrobbler, player, api, ui) {
     const butterchurnDurationInput = document.getElementById('butterchurn-duration-input');
     const butterchurnRandomizeToggle = document.getElementById('butterchurn-randomize-toggle');
 
-    const updateButterchurnSettingsVisibility = () => {
+    const updateButterchurnSettingsVisibility = async () => {
         const isEnabled = visualizerEnabledToggle ? visualizerEnabledToggle.checked : false;
         const isButterchurn = visualizerPresetSelect ? visualizerPresetSelect.value === 'butterchurn' : false;
         const show = isEnabled && isButterchurn;
@@ -2204,7 +2470,7 @@ export function initializeSettings(scrobbler, player, api, ui) {
         if (butterchurnRandomizeSetting) butterchurnRandomizeSetting.style.display = showSubSettings ? 'flex' : 'none';
 
         // Populate preset list using module-level cache (works even before visualizer initializes)
-        const { keys: presetNames } = getButterchurnPresets();
+        const { keys: presetNames } = await getButterchurnPresets();
         const select = butterchurnSpecificPresetSelect;
 
         if (select && presetNames.length > 0) {
@@ -2239,7 +2505,7 @@ export function initializeSettings(scrobbler, player, api, ui) {
         }
     };
 
-    const updateVisualizerSettingsVisibility = (enabled) => {
+    const updateVisualizerSettingsVisibility = async (enabled) => {
         const display = enabled ? 'flex' : 'none';
         if (visualizerModeSetting) visualizerModeSetting.style.display = display;
         if (visualizerSmartIntensitySetting) visualizerSmartIntensitySetting.style.display = display;
@@ -2247,7 +2513,7 @@ export function initializeSettings(scrobbler, player, api, ui) {
         if (visualizerPresetSetting) visualizerPresetSetting.style.display = display;
 
         // Also update Butterchurn specific visibility
-        updateButterchurnSettingsVisibility();
+        await updateButterchurnSettingsVisibility();
     };
 
     // Initialize preset select value early so visibility logic works correctly on load
@@ -2258,24 +2524,24 @@ export function initializeSettings(scrobbler, player, api, ui) {
     if (visualizerEnabledToggle) {
         visualizerEnabledToggle.checked = visualizerSettings.isEnabled();
 
-        updateVisualizerSettingsVisibility(visualizerEnabledToggle.checked);
+        await updateVisualizerSettingsVisibility(visualizerEnabledToggle.checked);
 
-        visualizerEnabledToggle.addEventListener('change', (e) => {
+        visualizerEnabledToggle.addEventListener('change', async (e) => {
             visualizerSettings.setEnabled(e.target.checked);
-            updateVisualizerSettingsVisibility(e.target.checked);
+            await updateVisualizerSettingsVisibility(e.target.checked);
         });
     }
 
     // Visualizer Preset Select
     if (visualizerPresetSelect) {
         // value set above
-        visualizerPresetSelect.addEventListener('change', (e) => {
+        visualizerPresetSelect.addEventListener('change', async (e) => {
             const val = e.target.value;
             visualizerSettings.setPreset(val);
             if (ui && ui.visualizer) {
                 ui.visualizer.setPreset(val);
             }
-            updateButterchurnSettingsVisibility();
+            await updateButterchurnSettingsVisibility();
 
             //Since changing the preset breaks the visualizer, a location.reload() is added to make sure that it works
             window.location.reload();
@@ -2284,9 +2550,9 @@ export function initializeSettings(scrobbler, player, api, ui) {
 
     if (butterchurnCycleToggle) {
         butterchurnCycleToggle.checked = visualizerSettings.isButterchurnCycleEnabled();
-        butterchurnCycleToggle.addEventListener('change', (e) => {
+        butterchurnCycleToggle.addEventListener('change', async (e) => {
             visualizerSettings.setButterchurnCycleEnabled(e.target.checked);
-            updateButterchurnSettingsVisibility();
+            await updateButterchurnSettingsVisibility();
         });
     }
 
@@ -2318,30 +2584,30 @@ export function initializeSettings(scrobbler, player, api, ui) {
     }
 
     // Refresh settings when presets are loaded asynchronously
-    window.addEventListener('butterchurn-presets-loaded', () => {
+    window.addEventListener('butterchurn-presets-loaded', async () => {
         console.log('[Settings] Butterchurn presets loaded event received');
-        updateButterchurnSettingsVisibility();
+        await updateButterchurnSettingsVisibility();
     });
 
     // Check if presets already cached and update immediately
-    const { keys: cachedKeys } = getButterchurnPresets();
+    const { keys: cachedKeys } = await getButterchurnPresets();
     if (cachedKeys.length > 0) {
         console.log('[Settings] Presets already cached, updating dropdown immediately');
-        updateButterchurnSettingsVisibility();
+        await updateButterchurnSettingsVisibility();
     }
 
     // Watch for appearance tab becoming active and refresh presets
     const appearanceTabContent = document.getElementById('settings-tab-appearance');
     if (appearanceTabContent) {
-        const observer = new MutationObserver((mutations) => {
-            mutations.forEach((mutation) => {
+        const observer = new MutationObserver(async (mutations) => {
+            for (const mutation of mutations) {
                 if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                     if (appearanceTabContent.classList.contains('active')) {
                         console.log('[Settings] Appearance tab became active, refreshing presets');
-                        updateButterchurnSettingsVisibility();
+                        await updateButterchurnSettingsVisibility();
                     }
                 }
-            });
+            }
         });
         observer.observe(appearanceTabContent, { attributes: true });
     }
@@ -2462,15 +2728,6 @@ export function initializeSettings(scrobbler, player, api, ui) {
         sidebarShowAboutToggle.checked = sidebarSectionSettings.shouldShowAbout();
         sidebarShowAboutToggle.addEventListener('change', (e) => {
             sidebarSectionSettings.setShowAbout(e.target.checked);
-            sidebarSectionSettings.applySidebarVisibility();
-        });
-    }
-
-    const sidebarShowDownloadToggle = document.getElementById('sidebar-show-download-bottom-toggle');
-    if (sidebarShowDownloadToggle) {
-        sidebarShowDownloadToggle.checked = sidebarSectionSettings.shouldShowDownload();
-        sidebarShowDownloadToggle.addEventListener('change', (e) => {
-            sidebarSectionSettings.setShowDownload(e.target.checked);
             sidebarSectionSettings.applySidebarVisibility();
         });
     }
@@ -2608,18 +2865,18 @@ export function initializeSettings(scrobbler, player, api, ui) {
     // Filename template setting
     const filenameTemplate = document.getElementById('filename-template');
     if (filenameTemplate) {
-        filenameTemplate.value = localStorage.getItem('filename-template') || '{trackNumber} - {artist} - {title}';
+        filenameTemplate.value = modernSettings.filenameTemplate;
         filenameTemplate.addEventListener('change', (e) => {
-            localStorage.setItem('filename-template', e.target.value);
+            modernSettings.filenameTemplate = String(e.target.value);
         });
     }
 
     // ZIP folder template
     const zipFolderTemplate = document.getElementById('zip-folder-template');
     if (zipFolderTemplate) {
-        zipFolderTemplate.value = localStorage.getItem('zip-folder-template') || '{albumTitle} - {albumArtist}';
+        zipFolderTemplate.value = modernSettings.folderTemplate;
         zipFolderTemplate.addEventListener('change', (e) => {
-            localStorage.setItem('zip-folder-template', e.target.value);
+            modernSettings.folderTemplate = String(e.target.value);
         });
     }
 
@@ -2710,8 +2967,32 @@ export function initializeSettings(scrobbler, player, api, ui) {
         if (!button) return;
 
         const li = button.closest('li');
-        const index = parseInt(li.dataset.index, 10);
-        const type = li.dataset.type || 'api'; // Default to api if not present
+        const type = button.dataset.type || li?.dataset.type || 'api';
+
+        if (button.classList.contains('add-instance')) {
+            const url = prompt(`Enter custom ${type.toUpperCase()} instance URL (e.g. https://my-instance.com):`);
+            if (url && url.trim()) {
+                let formattedUrl = url.trim();
+                if (!formattedUrl.startsWith('http')) {
+                    formattedUrl = 'https://' + formattedUrl;
+                }
+                api.settings.addUserInstance(type, formattedUrl);
+                ui.renderApiSettings();
+            }
+            return;
+        }
+
+        if (button.classList.contains('delete-instance')) {
+            const url = li.dataset.url;
+            if (url && confirm(`Delete custom instance ${url}?`)) {
+                api.settings.removeUserInstance(type, url);
+                ui.renderApiSettings();
+            }
+            return;
+        }
+
+        const index = parseInt(li?.dataset.index, 10);
+        if (isNaN(index)) return;
 
         const instances = await api.settings.getInstances(type);
 
@@ -3014,7 +3295,20 @@ export function initializeSettings(scrobbler, player, api, ui) {
 
                     // Clear IndexedDB - try to clear individual stores, fallback to deleting database
                     try {
-                        const stores = ['tracks', 'albums', 'artists', 'playlists', 'settings', 'history'];
+                        const stores = [
+                            'favorites_tracks',
+                            'favorites_videos',
+                            'favorites_albums',
+                            'favorites_artists',
+                            'favorites_playlists',
+                            'favorites_mixes',
+                            'history_tracks',
+                            'user_playlists',
+                            'user_folders',
+                            'settings',
+                            'pinned_items',
+                        ];
+
                         for (const storeName of stores) {
                             try {
                                 await db.performTransaction(storeName, 'readwrite', (store) => store.clear());
@@ -3026,7 +3320,7 @@ export function initializeSettings(scrobbler, player, api, ui) {
                         console.log('Could not clear IndexedDB stores:', dbError);
                         // Try to delete the entire database as fallback
                         try {
-                            const deleteRequest = indexedDB.deleteDatabase('monochromeDB');
+                            const deleteRequest = indexedDB.deleteDatabase('MonochromeDB');
                             await new Promise((resolve, reject) => {
                                 deleteRequest.onsuccess = resolve;
                                 deleteRequest.onerror = reject;

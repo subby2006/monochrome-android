@@ -2,8 +2,7 @@
     "name": "monochrome",
     "type": "module",
     "version": "2.5.0",
-    "description": "[<img src=\"https://github.com/SamidyFR/monochrome/blob/main/assets/512.png?raw=true\" alt=\"Monochrome Logo\">](https://monochrome.samidy.com)",
-    "main": "sw.js",
+    "description": "[<img src=\"https://github.com/monochrome-music/monochrome/blob/main/assets/512.png?raw=true\" alt=\"Monochrome Logo\">](https://monochrome.tf)",
     "scripts": {
         "dev": "vite",
         "dev:capacitor": "npm run dev",
@@ -17,21 +16,20 @@
         "lint:js": "eslint .",
         "lint:css": "stylelint \"**/*.css\"",
         "lint:html": "htmlhint \"**/*.html\" --ignore=\"dist/**,legacy/**,node_modules/**\"",
-        "lint": "npm run lint:js && npm run lint:css && npm run lint:html",
-        "format": "prettier --write .",
-        "test": "echo \"Error: no test specified\" && exit 1"
+        "lint": "bun run lint:js && bun run lint:css && bun run lint:html",
+        "format": "prettier --write ."
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/SamidyFR/monochrome.git"
+        "url": "git+https://github.com/monochrome-music/monochrome.git"
     },
     "keywords": [],
     "author": "",
     "license": "ISC",
     "bugs": {
-        "url": "https://github.com/SamidyFR/monochrome/issues"
+        "url": "https://github.com/monochrome-music/monochrome/issues"
     },
-    "homepage": "https://github.com/SamidyFR/monochrome#readme",
+    "homepage": "https://github.com/monochrome-music/monochrome#readme",
     "devDependencies": {
         "@capacitor/cli": "^7.4.3",
         "@types/node": "^25.3.5",
@@ -80,13 +78,18 @@
         "appwrite": "^23.0.0",
         "butterchurn": "^2.6.7",
         "butterchurn-presets": "^2.4.7",
+        "client-zip": "^2.5.0",
         "cookie-session": "^2.1.1",
-        "dashjs": "^5.1.1",
+        "eventemitter3": "^5.0.4",
+        "events": "^3.3.0",
         "fuse.js": "^7.1.0",
         "hls.js": "^1.6.15",
         "jose": "^6.2.0",
         "pocketbase": "^0.26.8",
-        "taglib-wasm": "^1.0.5",
+        "shaka-player": "^5.0.7",
+        "simple-icons": "^16.12.0",
+        "svgo": "^4.0.1",
+        "url-toolkit": "^2.2.5",
         "uuid": "^13.0.0"
     }
 }

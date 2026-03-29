@@ -1,23 +1,25 @@
 name: Lint Codebase
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
 
 permissions:
-  contents: write
+    contents: write
+    actions: write
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
+    lint:
+        runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 1
+                  ref: ${{ github.head_ref || github.ref }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -40,13 +42,12 @@ jobs:
         run: npm run format
         continue-on-error: true
 
-      - name: Commit and Push lint fixes
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: 'style: auto-fix linting issues'
-          commit_user_name: 'github-actions[bot]'
-          commit_user_email: 'github-actions[bot]@users.noreply.github.com'
-          only_if_changed: true
+            - name: Commit and Push lint fixes
+              uses: stefanzweifel/git-auto-commit-action@v5
+              with:
+                  commit_message: 'style: auto-fix linting issues'
+                  commit_user_name: 'github-actions[bot]'
+                  commit_user_email: 'github-actions[bot]@users.noreply.github.com'
 
       - name: Run HTML Lint
         run: npm run lint:html
